@@ -25,17 +25,6 @@
         "${workspaceFolder}/test_workspace"
       ],
       "outFiles": ["${workspaceFolder}/packages/extension/dist/extension.js"]
-    },
-    {
-      "name": "Extension Tests",
-      "type": "extensionHost",
-      "request": "launch",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/packages/extension",
-        "--extensionTestsPath=${workspaceFolder}/out/test/suite/index"
-      ],
-      "outFiles": ["${workspaceFolder}/packages/extension/dist/**/*.js"],
-      "preLaunchTask": "npm: build"
     }
   ]
 }
