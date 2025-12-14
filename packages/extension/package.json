@@ -6,6 +6,10 @@
   "categories": [
     "Debuggers"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dankeboy36/error-replay-debug-adapter.git"
+  },
   "publisher": "dankeboy36",
   "type": "module",
   "main": "./dist/extension.js",

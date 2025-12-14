@@ -2,7 +2,7 @@
 
 Generic inline debug adapter that replays recorded errors through VS Code’s debug UI. It is backend-agnostic: you provide a `ReplayDataSource` that returns a stack trace and lazily resolves variables per snapshot.
 
-> [!IMPORTANT]
+> [!NOTE]
 > There is no live execution: everything shown comes from recorded snapshots supplied by your data source.
 
 ## What it supports

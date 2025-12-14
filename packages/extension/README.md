@@ -8,6 +8,7 @@ VS Code extension that wires the error replay adapter for interactive testing.
 - CodeLens on error locations to launch a replay directly from source.
 - Command `Error Replay: Open File` to pick a replay JSON; default to `fixtures/replay.json` if present.
 - Command `Error Replay: Generate Mock Error` to run the mock harvester and generate fixtures into `fixtures/generated/`.
+  ![Error replay – generate mock](../../media/gen-mock.gif)
 
 ## Running
 

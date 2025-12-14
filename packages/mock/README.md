@@ -15,6 +15,5 @@ Tools to generate realistic replay fixtures without a backend.
 
 - `generateMockReplay(workspacePath, targetFile, registry?)`: programmatic API to harvest a replay, drop it into `fixtures/generated/`, and notify a registry if provided.
 - The `Error Replay: Generate Mock Error` command in the extension wraps this helper; generated fixtures appear in `fixtures/generated/` and surface via CodeLens.
-  ![Error replay – generate mock](../../media/gen-mock.gif)
 
 These fixtures let you exercise the adapter/extension without connecting to Datadog or an ESP crash pipeline.
