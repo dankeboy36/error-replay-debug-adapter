@@ -1,6 +1,7 @@
 import * as path from 'node:path'
 
 import {
+  BreakpointEvent,
   Handles,
   InitializedEvent,
   LoggingDebugSession,
@@ -47,6 +48,11 @@ interface InstrumentationInfo {
   stackId?: string
   errorId?: string
   context?: Record<string, unknown>
+  source?: string
+  snapshotCount?: number
+  symbolicated?: boolean
+  architecture?: string
+  registers?: Record<string, string>
 }
 
 interface ReplayFrame {
@@ -56,6 +62,7 @@ interface ReplayFrame {
   line: number
   column: number
   snapshotId: string | null
+  snapshotIndex?: number
 }
 
 interface StepResult {
@@ -113,6 +120,12 @@ class ReplayRuntime {
     instrumentationInfo?: InstrumentationInfo
   ) {
     this.dataSource = dataSource
+    const frames = this.buildFrames(stackTrace.frames)
+    const snapshotIndexMax = Math.max(
+      0,
+      ...frames.map((frame) => frame.snapshotIndex ?? 0)
+    )
+    this.frames = frames
     this.instrumentationInfo = {
       traceId: stackTrace.traceId ?? instrumentationInfo?.traceId,
       spanId: stackTrace.spanId ?? instrumentationInfo?.spanId,
@@ -121,8 +134,17 @@ class ReplayRuntime {
       stackId: stackTrace.id ?? instrumentationInfo?.stackId,
       errorId: stackTrace.eventId ?? instrumentationInfo?.errorId,
       context: instrumentationInfo?.context,
+      source: stackTrace.source ?? instrumentationInfo?.source,
+      snapshotCount:
+        stackTrace.snapshotCount ??
+        instrumentationInfo?.snapshotCount ??
+        Math.max(snapshotIndexMax, frames.filter((f) => !!f.snapshotId).length),
+      symbolicated:
+        stackTrace.symbolicated ?? instrumentationInfo?.symbolicated,
+      architecture:
+        stackTrace.architecture ?? instrumentationInfo?.architecture,
+      registers: stackTrace.registers ?? instrumentationInfo?.registers,
     }
-    this.frames = this.buildFrames(stackTrace.frames)
     this.breakpoints = new Map()
     this.cursor = this.findInitialFrame()
   }
@@ -154,6 +176,12 @@ class ReplayRuntime {
         line,
         column,
         snapshotId,
+        snapshotIndex:
+          typeof frame.snapshotIndex === 'number'
+            ? frame.snapshotIndex
+            : snapshotId
+              ? idx + 1
+              : undefined,
       }
     })
 
@@ -221,6 +249,31 @@ class ReplayRuntime {
     return frame?.snapshotId ?? null
   }
 
+  public getSnapshotProgress(
+    frameId?: number
+  ): { index: number; total: number } | null {
+    const framesWithSnapshots = this.frames.filter((f) => f.snapshotId)
+    if (!framesWithSnapshots.length) {
+      return null
+    }
+    const targetFrame =
+      frameId !== undefined
+        ? this.frames.find((f) => f.id === frameId)
+        : this.frames[this.currentFrameIndex()]
+    if (!targetFrame) {
+      return null
+    }
+    const idx = framesWithSnapshots.findIndex((f) => f.id === targetFrame.id)
+    if (idx < 0) {
+      return null
+    }
+    const inferredTotal =
+      this.instrumentationInfo.snapshotCount ??
+      framesWithSnapshots.length ??
+      this.frames.length
+    return { index: idx + 1, total: inferredTotal }
+  }
+
   public getCurrentSnapshotId(): string | null {
     const frame = this.frames[this.currentFrameIndex()]
     return frame?.snapshotId ?? null
@@ -268,9 +321,33 @@ class ReplayRuntime {
     return variables.arguments
   }
 
-  public getMeta(snapshotId: string | null): VariableMap {
+  public getMeta(snapshotId: string | null, frameId?: number): VariableMap {
+    const progress = this.getSnapshotProgress(frameId)
     return {
       snapshotId: { type: 'string', value: snapshotId ?? 'n/a' },
+      snapshotIndex: {
+        type: 'number',
+        value:
+          progress?.index ??
+          (typeof frameId === 'number'
+            ? frameId + 1
+            : this.currentFrameIndex() + 1),
+      },
+      snapshotCount: {
+        type: 'number',
+        value:
+          progress?.total ??
+          this.instrumentationInfo.snapshotCount ??
+          this.frames.length,
+      },
+      source: { type: 'string', value: this.instrumentationInfo.source ?? '' },
+      eventId: {
+        type: 'string',
+        value:
+          this.instrumentationInfo.errorId ??
+          this.instrumentationInfo.stackId ??
+          '',
+      },
       traceId: {
         type: 'string',
         value: this.instrumentationInfo.traceId ?? '',
@@ -280,20 +357,41 @@ class ReplayRuntime {
         type: 'string',
         value: this.instrumentationInfo.sourceObjectUri ?? '',
       },
+      timestamp: {
+        type: 'number',
+        value: this.instrumentationInfo.timestamp ?? Date.now(),
+      },
+      symbolicated: {
+        type: 'boolean',
+        value: this.instrumentationInfo.symbolicated ?? false,
+      },
+      architecture: {
+        type: 'string',
+        value: this.instrumentationInfo.architecture ?? '',
+      },
     }
   }
 
   public setBreakpoints(
     sourcePath: string | undefined,
     lines: number[]
-  ): number[] {
+  ): Map<number, boolean> {
+    const statuses = new Map<number, boolean>()
     if (!sourcePath) {
-      return []
+      return statuses
     }
     const normalized = path.normalize(sourcePath)
-    const uniqueLines = new Set(lines)
-    this.breakpoints.set(normalized, uniqueLines)
-    return Array.from(uniqueLines.values())
+    const verifiedLines: number[] = []
+    const uniqueLines = Array.from(new Set(lines))
+    for (const line of uniqueLines) {
+      const recorded = this.isRecordedLocation(normalized, line)
+      statuses.set(line, recorded)
+      if (recorded) {
+        verifiedLines.push(line)
+      }
+    }
+    this.breakpoints.set(normalized, new Set(verifiedLines))
+    return statuses
   }
 
   private hitsBreakpoint(frame: ReplayFrame | undefined): boolean {
@@ -307,13 +405,12 @@ class ReplayRuntime {
     return set.has(frame.line)
   }
 
-  private findNextBreakpointIndex(startIdx: number): number {
-    for (let i = startIdx; i < this.frames.length; i++) {
-      if (this.hitsBreakpoint(this.frames[i])) {
-        return i
-      }
-    }
-    return -1
+  private isRecordedLocation(filePath: string, line: number): boolean {
+    const normalized = path.normalize(filePath)
+    return this.frames.some((f) => {
+      if (!f.file) return false
+      return path.normalize(f.file) === normalized && f.line === line
+    })
   }
 
   public stepOnce(reason?: string): StepResult {
@@ -330,13 +427,31 @@ class ReplayRuntime {
   }
 
   public continueExecution(): StepResult {
-    const nextIdx = this.findNextBreakpointIndex(this.cursor + 1)
-    if (nextIdx === -1) {
+    if (this.cursor + 1 >= this.frames.length) {
       this.cursor = this.frames.length
       return { terminated: true }
     }
-    this.cursor = nextIdx
-    return { stopped: true, reason: 'breakpoint' }
+    while (this.cursor + 1 < this.frames.length) {
+      this.cursor += 1
+      const frame = this.frames[this.cursor]
+      if (this.hitsBreakpoint(frame)) {
+        return { stopped: true, reason: 'breakpoint' }
+      }
+    }
+    this.cursor = this.frames.length
+    return { terminated: true }
+  }
+
+  public hasBreakpointAhead(): boolean {
+    if (this.cursor + 1 >= this.frames.length) {
+      return false
+    }
+    for (let i = this.cursor + 1; i < this.frames.length; i++) {
+      if (this.hitsBreakpoint(this.frames[i])) {
+        return true
+      }
+    }
+    return false
   }
 
   public getOrderedFrames(): ReplayFrame[] {
@@ -514,10 +629,24 @@ export class ErrorReplaySession extends LoggingDebugSession {
   private runtime?: ReplayRuntime
   private readonly _variableHandles = new Handles<VariableContainer>()
   private readonly _pendingBreakpoints = new Map<string | undefined, number[]>()
+  private readonly _breakpointsBySource = new Map<
+    string,
+    Map<number, DebugProtocol.Breakpoint>
+  >()
+
+  private breakpointIdSeq = 1
   private startLineHint?: number
   private startSourcePathHint?: string
   private terminationMessageSent = false
   private errorSummary?: string
+  private exceptionDetails?:
+    | {
+        name?: string
+        message?: string
+        stack?: string
+      }
+    | undefined
+
   private readonly dataSource: ReplayDataSource
   private readonly workspaceFolder?: string
   private readonly options?: ReplaySessionOptions
@@ -581,6 +710,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
         args.errorId ||
         stackTrace.traceId ||
         'Recorded error'
+      this.exceptionDetails = stackTrace.exception
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown error'
       this.sendErrorResponse(response, {
@@ -590,9 +720,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
       return
     }
 
-    for (const [sourcePath, lines] of this._pendingBreakpoints.entries()) {
-      this.runtime.setBreakpoints(sourcePath, lines)
-    }
+    this.refreshBreakpoints()
     this.startLineHint =
       typeof args.startLine === 'number' ? args.startLine : undefined
     this.startSourcePathHint = args.startSourcePath
@@ -646,9 +774,13 @@ export class ErrorReplaySession extends LoggingDebugSession {
       ;(source as DebugProtocol.Source).origin = sourcePath
         ? undefined
         : 'Recorded frame (source unavailable)'
+      const progress = this.runtime?.getSnapshotProgress(frame.id)
+      const name = progress
+        ? `${frame.name} [replay ${progress.index}/${progress.total}]`
+        : frame.name
       const sf = new StackFrame(
         frame.id,
-        frame.name,
+        name,
         source,
         frame.line,
         frame.column ?? 1
@@ -692,11 +824,24 @@ export class ErrorReplaySession extends LoggingDebugSession {
         false
       ),
       new Scope(
-        'Replay Meta',
-        this._variableHandles.create({ kind: 'meta', snapshotId }),
+        'Replay',
+        this._variableHandles.create({
+          kind: 'replay',
+          snapshotId,
+          frameId: args.frameId,
+        }),
         true
       ),
     ]
+    if (this.exceptionDetails) {
+      scopes.push(
+        new Scope(
+          'Exception',
+          this._variableHandles.create({ kind: 'exception' }),
+          true
+        )
+      )
+    }
 
     response.body = { scopes }
     this.sendResponse(response)
@@ -736,7 +881,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
         ? args.frameId
         : this.runtime.currentFrameIndex()
     const snapshotId = this.runtime.getSnapshotIdForFrame(frameId)
-    const valueNode = await this.lookupVariable(snapshotId, expr)
+    const valueNode = await this.lookupVariable(snapshotId, expr, frameId)
 
     if (!valueNode) {
       response.body = { result: 'not available', variablesReference: 0 }
@@ -787,6 +932,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
         'console'
       )
     )
+    this.emitReplayStatus()
     this.sendEvent(new StoppedEvent('step', THREAD_ID))
   }
 
@@ -800,6 +946,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
         'console'
       )
     )
+    this.emitReplayStatus()
     this.sendEvent(new StoppedEvent('step', THREAD_ID))
   }
 
@@ -809,6 +956,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
   ): void {
     if (typeof args.frameId === 'number') {
       this.runtime?.setCursorByFrameId(args.frameId)
+      this.emitReplayStatus()
       this.sendEvent(new StoppedEvent('restart', THREAD_ID))
     }
     this.sendResponse(response)
@@ -829,14 +977,36 @@ export class ErrorReplaySession extends LoggingDebugSession {
     args: DebugProtocol.SetBreakpointsArguments
   ): void {
     const sourcePath = args.source?.path
+    const normalizedSource = sourcePath ? path.normalize(sourcePath) : undefined
     const lines = (args.lines ?? []).map((line) => line)
-    this._pendingBreakpoints.set(sourcePath, lines)
-    if (this.runtime) {
-      this.runtime.setBreakpoints(sourcePath, lines)
+    this._pendingBreakpoints.set(normalizedSource, lines)
+
+    const statusMap = this.runtime?.setBreakpoints(normalizedSource, lines)
+    const existing = normalizedSource
+      ? this._breakpointsBySource.get(normalizedSource)
+      : undefined
+    const next = new Map<number, DebugProtocol.Breakpoint>()
+    const breakpoints: DebugProtocol.Breakpoint[] = []
+    for (const line of lines) {
+      const verified = statusMap?.get(line) ?? false
+      const prior = existing?.get(line)
+      const bp: DebugProtocol.Breakpoint = {
+        id: prior?.id ?? this.breakpointIdSeq++,
+        verified,
+        line,
+        source:
+          prior?.source ??
+          (sourcePath
+            ? new Source(path.basename(sourcePath), sourcePath)
+            : undefined),
+      }
+      next.set(line, bp)
+      breakpoints.push(bp)
     }
-    response.body = {
-      breakpoints: lines.map((line) => ({ verified: true, line })),
+    if (normalizedSource) {
+      this._breakpointsBySource.set(normalizedSource, next)
     }
+    response.body = { breakpoints }
     this.sendResponse(response)
   }
 
@@ -865,7 +1035,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
     | undefined {
     const instrumentation = this.runtime?.instrumentationInfo
     const frames = this.runtime?.getAllFrames() ?? []
-    if (!instrumentation && !frames.length) {
+    if (!instrumentation && !frames.length && !this.exceptionDetails) {
       return undefined
     }
 
@@ -874,21 +1044,27 @@ export class ErrorReplaySession extends LoggingDebugSession {
       instrumentation?.spanId ??
       instrumentation?.traceId ??
       'error-replay-exception'
-    const description = this.errorSummary ?? 'Recorded error replay'
-    const stackTrace = frames
-      .map((frame) => {
-        const location = frame.file ? `${frame.file}:${frame.line ?? ''}` : ''
-        return `${frame.name}${location ? ` (${location})` : ''}`
-      })
-      .join('\n')
+    const description =
+      this.formatExceptionSummary() ??
+      this.exceptionDetails?.message ??
+      this.errorSummary ??
+      'Recorded error'
+    const stackTrace =
+      this.exceptionDetails?.stack ||
+      frames
+        .map((frame) => {
+          const location = frame.file ? `${frame.file}:${frame.line ?? ''}` : ''
+          return `${frame.name}${location ? ` (${location})` : ''}`
+        })
+        .join('\n')
 
     return {
       exceptionId,
       description,
       breakMode: 'always',
       details: {
-        typeName: 'Error',
-        message: description,
+        typeName: this.exceptionDetails?.name ?? 'Error',
+        message: this.exceptionDetails?.message ?? description,
         stackTrace: stackTrace || undefined,
       },
     }
@@ -925,10 +1101,12 @@ export class ErrorReplaySession extends LoggingDebugSession {
         return this.buildVariablesFromRecord(
           await this.runtime.getArguments(container.snapshotId)
         )
-      case 'meta':
+      case 'replay':
         return this.buildVariablesFromRecord(
-          this.runtime.getMeta(container.snapshotId)
+          this.runtime.getMeta(container.snapshotId, container.frameId)
         )
+      case 'exception':
+        return this.buildExceptionVariables()
       case 'object':
         return this.buildVariablesFromRecord(container.fields ?? {})
       default:
@@ -936,9 +1114,29 @@ export class ErrorReplaySession extends LoggingDebugSession {
     }
   }
 
+  private buildExceptionVariables(): DebugProtocol.Variable[] {
+    if (!this.exceptionDetails) {
+      return []
+    }
+    const { name, message, stack } = this.exceptionDetails
+    const summary = this.formatExceptionSummary()
+    const record: VariableMap = {
+      name: { type: 'string', value: name ?? 'n/a' },
+      message: {
+        type: 'string',
+        value: summary ?? message ?? 'n/a',
+      },
+    }
+    if (stack) {
+      record.stack = { type: 'string', value: stack }
+    }
+    return this.buildVariablesFromRecord(record)
+  }
+
   private async lookupVariable(
     snapshotId: string | null,
-    expression: string
+    expression: string,
+    frameId?: number
   ): Promise<VariableNode | null> {
     const segments = expression.split('.').filter(Boolean)
     if (!segments.length) {
@@ -951,7 +1149,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
     const [root, ...rest] = segments
     const locals = snapshotId ? await this.runtime.getLocals(snapshotId) : {}
     const args = snapshotId ? await this.runtime.getArguments(snapshotId) : {}
-    const meta = this.runtime?.getMeta(snapshotId) ?? {}
+    const meta = this.runtime?.getMeta(snapshotId, frameId) ?? {}
 
     let node: VariableNode | undefined =
       locals[root] ?? args[root] ?? meta[root]
@@ -1120,12 +1318,59 @@ export class ErrorReplaySession extends LoggingDebugSession {
     return /^-?\d+(\.\d+)?$/.test(value)
   }
 
+  private formatExceptionSummary(): string | null {
+    if (!this.exceptionDetails) {
+      return null
+    }
+    const name = this.exceptionDetails.name?.trim()
+    const rawMessage = this.exceptionDetails.message?.trim()
+    const firstLine = rawMessage?.split(/\r?\n/)[0]?.trim()
+    let cleanedMessage = firstLine ?? ''
+
+    if (name && cleanedMessage) {
+      const lowerName = name.toLowerCase()
+      const lowerMsg = cleanedMessage.toLowerCase()
+      const prefixed = `${lowerName}:`
+      if (lowerMsg.startsWith(prefixed)) {
+        cleanedMessage = cleanedMessage.slice(prefixed.length).trim()
+      } else if (lowerMsg === lowerName) {
+        cleanedMessage = ''
+      }
+    }
+
+    const summary = cleanedMessage || name
+    return summary || null
+  }
+
+  private emitReplayStatus(): void {
+    if (!this.runtime || this.runtime.isTerminated()) {
+      return
+    }
+    const progress = this.runtime.getSnapshotProgress()
+    if (progress) {
+      const atEnd = progress.index >= progress.total
+      const hasNextBreakpoint = this.runtime.hasBreakpointAhead()
+      const suffix = atEnd
+        ? ' - Continue ends replay; use Restart Frame to revisit'
+        : hasNextBreakpoint
+          ? ' - Continue runs to next breakpoint; Step Over advances one snapshot'
+          : ' - Continue runs to end; Step Over advances one snapshot'
+      this.sendEvent(
+        new OutputEvent(
+          `Stopped (replay) at snapshot ${progress.index}/${progress.total}${suffix}\n`,
+          'console'
+        )
+      )
+    }
+  }
+
   private stopWithReason(reason: string): void {
     if (!this.runtime || this.runtime.isTerminated()) {
       this.emitTerminationOutput()
       this.sendEvent(new TerminatedEvent())
       return
     }
+    this.emitReplayStatus()
     this.sendEvent(new StoppedEvent(reason, THREAD_ID))
   }
 
@@ -1150,6 +1395,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
       result.reason && allowedReasons.has(result.reason)
         ? result.reason
         : 'step'
+    this.emitReplayStatus()
     this.sendEvent(new StoppedEvent(reason, THREAD_ID))
   }
 
@@ -1163,6 +1409,44 @@ export class ErrorReplaySession extends LoggingDebugSession {
     )
     this.startLineHint = undefined
     this.startSourcePathHint = undefined
+  }
+
+  private refreshBreakpoints(): void {
+    if (!this.runtime) {
+      return
+    }
+    for (const [sourcePath, lines] of this._pendingBreakpoints.entries()) {
+      const statusMap = this.runtime.setBreakpoints(sourcePath, lines)
+      const normalized = sourcePath ? path.normalize(sourcePath) : undefined
+      const existing = normalized
+        ? this._breakpointsBySource.get(normalized)
+        : undefined
+      const next = new Map<number, DebugProtocol.Breakpoint>()
+
+      for (const line of lines) {
+        const verified = statusMap.get(line) ?? false
+        const prior = existing?.get(line)
+        const bp: DebugProtocol.Breakpoint =
+          prior ??
+          ({
+            id: this.breakpointIdSeq++,
+            verified,
+            line,
+            source:
+              sourcePath && new Source(path.basename(sourcePath), sourcePath),
+          } as DebugProtocol.Breakpoint)
+        const changed = prior ? prior.verified !== verified : false
+        bp.verified = verified
+        next.set(line, bp)
+        if (changed) {
+          this.sendEvent(new BreakpointEvent('changed', bp))
+        }
+      }
+
+      if (normalized) {
+        this._breakpointsBySource.set(normalized, next)
+      }
+    }
   }
 
   private ensureVisibleCursor(): void {
@@ -1219,6 +1503,7 @@ export class ErrorReplaySession extends LoggingDebugSession {
       )
     )
     this.sendResponse(response)
+    this.emitReplayStatus()
     this.sendEvent(new StoppedEvent('step', THREAD_ID))
   }
 
@@ -1226,18 +1511,40 @@ export class ErrorReplaySession extends LoggingDebugSession {
     if (this.terminationMessageSent) {
       return
     }
-    const msg = this.errorSummary
-      ? `Replay finished: ${this.errorSummary}`
-      : 'Replay finished'
+    this.emitExceptionOutput()
+    const summary =
+      this.formatExceptionSummary() ?? this.errorSummary ?? undefined
+    const msg = summary ? `Replay finished: ${summary}` : 'Replay finished'
     this.sendEvent(new OutputEvent(`${msg}\n`, 'console'))
     this.terminationMessageSent = true
+  }
+
+  private emitExceptionOutput(): void {
+    if (!this.exceptionDetails) {
+      return
+    }
+    const summary =
+      this.formatExceptionSummary() ||
+      this.exceptionDetails.message ||
+      this.exceptionDetails.name
+    const stack = this.exceptionDetails.stack?.trim()
+    if (stack) {
+      this.sendEvent(new OutputEvent(`Exception:\n${stack}\n`, 'console'))
+      return
+    }
+    if (summary) {
+      this.sendEvent(new OutputEvent(`Exception: ${summary}\n`, 'console'))
+    }
   }
 }
 
 type VariableContainer =
-  | { kind: 'locals' | 'arguments' | 'meta'; snapshotId: string | null }
+  | { kind: 'locals' | 'arguments'; snapshotId: string | null }
+  | { kind: 'replay'; snapshotId: string | null; frameId?: number }
+  | { kind: 'exception' }
   | { kind: 'object'; snapshotId?: string | null; fields?: VariableMap }
 
+export * from './fixtureTypes.js'
 export * from './types.js'
 
 /** (non-API) */

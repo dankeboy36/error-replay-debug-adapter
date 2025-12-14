@@ -3,9 +3,12 @@ import * as path from 'node:path'
 
 import {
   ErrorReplaySession,
+  type FixtureScope,
   type LoadStackTraceParams,
   type LoadVariablesParams,
   type ReplayDataSource,
+  type ReplayFixture,
+  type ReplayFixtureFrame,
   type StackTrace,
   type StackTraceFrame,
   type VariablePayload,
@@ -31,30 +34,6 @@ interface ReplayRegistryEntry {
   frameOrder?: number
   errorTitle?: string
   occurredAt?: string
-}
-
-type FixtureVariable = { name?: string; type?: string; valuePreview?: string }
-type FixtureScope = {
-  type?: string
-  name?: string
-  variables?: FixtureVariable[]
-}
-type FixtureFrame = {
-  id?: number
-  functionName?: string
-  filePath?: string
-  line?: number
-  column?: number
-  scopes?: FixtureScope[]
-  snapshotId?: string
-  snapshot_id?: string
-}
-type FixtureReplay = {
-  id?: string
-  occurredAt?: string
-  title?: string
-  exception?: { name?: string; message?: string }
-  frames?: FixtureFrame[]
 }
 
 class FileReplayDataSource implements ReplayDataSource {
@@ -87,13 +66,13 @@ class FileReplayDataSource implements ReplayDataSource {
     return this.cache
   }
 
-  private buildStackTrace(fixture: FixtureReplay): {
+  private buildStackTrace(fixture: ReplayFixture): {
     stackTrace: StackTrace
     variables: Map<string, Variables>
   } {
     const variablesBySnapshot = new Map<string, Variables>()
     const frames: StackTraceFrame[] = (fixture.frames ?? []).map(
-      (frame, idx) => {
+      (frame: ReplayFixtureFrame, idx) => {
         const snapshotId =
           frame.snapshotId ??
           frame.snapshot_id ??
@@ -128,6 +107,7 @@ class FileReplayDataSource implements ReplayDataSource {
           line: lineZero,
           column: columnZero,
           snapshotId,
+          snapshotIndex: frame.snapshotIndex,
         }
       }
     )
@@ -140,6 +120,13 @@ class FileReplayDataSource implements ReplayDataSource {
       timestamp: fixture.occurredAt
         ? Date.parse(fixture.occurredAt)
         : Date.now(),
+      source: fixture.source ?? 'mock',
+      snapshotCount:
+        fixture.meta?.snapshotCount ?? fixture.frames?.length ?? frames.length,
+      symbolicated: fixture.meta?.symbolicated,
+      architecture: fixture.meta?.architecture,
+      registers: fixture.meta?.registers,
+      exception: fixture.exception,
     }
 
     return { stackTrace, variables: variablesBySnapshot }
@@ -164,9 +151,9 @@ class FileReplayDataSource implements ReplayDataSource {
   }
 }
 
-async function readFixture(filePath: string): Promise<FixtureReplay> {
+async function readFixture(filePath: string): Promise<ReplayFixture> {
   const content = await fs.promises.readFile(filePath, 'utf-8')
-  return JSON.parse(content) as FixtureReplay
+  return JSON.parse(content) as ReplayFixture
 }
 
 function normalizeFixturePath(maybePath?: string): string | undefined {

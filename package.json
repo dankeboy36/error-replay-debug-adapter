@@ -1,6 +1,7 @@
 {
   "name": "error-replay-debug-adapter",
   "version": "0.1.0",
+  "description": "Postmortem error replay in VS Code via a debug adapter",
   "keywords": [
     "vscode",
     "dap",

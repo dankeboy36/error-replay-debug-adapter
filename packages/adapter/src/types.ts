@@ -5,6 +5,17 @@ export type StackTrace = {
   readonly spanId?: string
   readonly traceId?: string
   readonly timestamp?: number
+  readonly source?: string
+  readonly snapshotCount?: number
+  readonly symbolicated?: boolean
+  readonly architecture?: string
+  readonly registers?: Record<string, string>
+  readonly tasks?: unknown
+  readonly exception?: {
+    readonly name?: string
+    readonly message?: string
+    readonly stack?: string
+  }
 }
 
 export type StackTraceFrame = {
@@ -17,6 +28,7 @@ export type StackTraceFrame = {
   readonly column?: number
   readonly snapshotId?: string
   readonly snapshot_id?: string
+  readonly snapshotIndex?: number
 }
 
 export type StackTraceToken =
