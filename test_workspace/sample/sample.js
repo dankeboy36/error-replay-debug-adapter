@@ -32,4 +32,9 @@ function main() {
   inner(user)
 }
 
+// eslint-disable-next-line no-unused-vars
+function ignored() {
+  console.log('expect unverified breakpoints in this scope')
+}
+
 main()

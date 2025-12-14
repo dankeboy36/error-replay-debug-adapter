@@ -215,6 +215,7 @@ async function handlePause(
       line: frame.location.lineNumber + 1,
       column: frame.location.columnNumber + 1,
       snapshotId,
+      snapshotIndex: i + 1,
       scopes,
     })
 
@@ -232,13 +233,20 @@ async function handlePause(
   const replay = {
     id: 'mock_err_001',
     occurredAt: new Date().toISOString(),
+    source: 'mock',
     title: data?.description || 'Uncaught exception',
     exception: {
       name: data?.className,
       message: data?.description,
+      stack: data?.description,
     },
     frames,
     variables,
+    meta: {
+      snapshotCount: frames.length,
+      symbolicated: true,
+      architecture: 'unknown',
+    },
   }
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true })
