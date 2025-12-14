@@ -42,6 +42,7 @@ const factory: vscode.DebugAdapterDescriptorFactory = {
 
 ## Limits
 
-- [!CAUTION]
-  No evaluate/setVariable/step-in; stepping is linear across recorded frames.
-- Assumes pre-recorded snapshots; not a live debugger or turing-complete VM.
+> [!NOTE]
+> No evaluate/setVariable/step-in; stepping is linear across recorded frames.
+>
+> Assumes pre-recorded snapshots; not a live debugger or turing-complete VM.
