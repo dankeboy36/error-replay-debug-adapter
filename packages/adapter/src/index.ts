@@ -1239,3 +1239,9 @@ type VariableContainer =
   | { kind: 'object'; snapshotId?: string | null; fields?: VariableMap }
 
 export * from './types.js'
+
+/** (non-API) */
+export const __testUtils = {
+  coerceValue,
+  isLikelyFilePath,
+}

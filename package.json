@@ -34,11 +34,12 @@
     "prebundle": "npm run build",
     "bundle": "webpack --mode production",
     "format": "prettier --write .",
-    "lint": "eslint packages --ext js,jsx,ts,tsx",
-    "lint:fix": "eslint packages --ext js,jsx,ts,tsx --fix",
+    "lint": "eslint packages --ext js,ts,mjs",
+    "lint:fix": "eslint packages --ext js,ts,mjs --fix",
     "prepackage": "npm run bundle",
     "package": "node scripts/packageVsix.js",
-    "release": "semantic-release"
+    "release": "semantic-release",
+    "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",
