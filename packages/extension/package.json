@@ -1,0 +1,65 @@
+{
+  "name": "error-replay-extension",
+  "displayName": "Error Replay Debugger",
+  "version": "0.1.0",
+  "private": true,
+  "categories": [
+    "Debuggers"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dankeboy36/error-replay-debug-adapter.git"
+  },
+  "publisher": "dankeboy36",
+  "type": "module",
+  "main": "./dist/extension.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p ."
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "errorReplay.generateMock",
+        "title": "Generate Mock Error",
+        "category": "Error Replay"
+      },
+      {
+        "command": "errorReplay.startReplayFile",
+        "title": "Start Replay (File)",
+        "category": "Error Replay"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "error-replay",
+        "label": "Error Replay"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "errorReplay.startReplayFile",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "dependencies": {},
+  "devDependencies": {
+    "@error-replay/adapter": "^0.1.0",
+    "@error-replay/mock": "^0.1.0",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.82.0",
+    "@vscode/debugadapter": "^1.68.0",
+    "@vscode/debugprotocol": "^1.68.0"
+  },
+  "engines": {
+    "vscode": "^1.82.0"
+  }
+}

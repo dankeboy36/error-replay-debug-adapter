@@ -1,0 +1,12 @@
+# Exclude everything by default
+**/*
+
+# Only include the packaged extension artifacts
+!packages/extension/dist/**
+!packages/extension/package.json
+!packages/extension/README.md
+!packages/extension/LICENSE
+
+# Optionally keep top-level metadata
+!LICENSE
+!README.md

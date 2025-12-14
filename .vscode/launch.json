@@ -1,0 +1,30 @@
+// A launch configuration that compiles the extension and then opens it inside a new window
+// Use IntelliSense to learn about possible attributes.
+// Hover to view descriptions of existing attributes.
+// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/extension",
+        "${workspaceFolder}/test_workspace"
+      ],
+      "outFiles": ["${workspaceFolder}/packages/extension/dist/extension.js"],
+      "preLaunchTask": "npm: build"
+    },
+    {
+      "name": "Preview Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/extension",
+        "${workspaceFolder}/test_workspace"
+      ],
+      "outFiles": ["${workspaceFolder}/packages/extension/dist/extension.js"]
+    }
+  ]
+}

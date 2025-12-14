@@ -1,0 +1,9 @@
+resources
+node_modules
+.DS_Store
+dist
+out
+packages/extension/.vsce
+test_workspace/fixtures
+test_workspace/snapshots
+*.vsix
