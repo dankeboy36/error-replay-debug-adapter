@@ -1,0 +1,26 @@
+# Ignore everything by default
+**/*
+
+# Keep the built extension payload and minimal metadata
+!dist/**/*.js
+!package.json
+!README.md
+!LICENSE
+
+# Drop source, configs, and stray builds
+src/**
+out/**
+tsconfig.json
+webpack.config.*js
+*.ts
+*.tsx
+*.map
+
+# Exclude repo-level and dev cruft
+../**
+node_modules/**
+.git/**
+.github/**
+.vscode/**
+*.vsix
+.DS_Store
